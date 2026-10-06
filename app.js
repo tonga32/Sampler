@@ -1,311 +1,48 @@
-(() => {
-  "use strict";
+(()=>{'use strict';
+const pads=[...document.querySelectorAll('.pad')],statusEl=document.querySelector('#status'),selectedName=document.querySelector('#selectedName'),readout=document.querySelector('#readout'),mainWave=document.querySelector('#mainWave'),waveTouch=document.querySelector('#waveTouch'),playhead=document.querySelector('#playhead'),micButton=document.querySelector('#micButton'),deleteBtn=document.querySelector('#deleteMode'),resetBtn=document.querySelector('#resetEdit');
+let ctx=null,micStream=null,rec=null,chunks=[],recording=-1,timer=null,liveRAF=0,selected=0,delMode=false,playheadRAF=0;const pointers=new Map();
+const d=Array.from({length:4},()=>({blob:null,buffer:null,wave:null,source:null,gain:null,playing:false,pitch:0,tempPitch:0,tempSpeed:1,scratch:null}));
+const status=t=>statusEl.textContent=t;
+async function audio(){if(!ctx)ctx=new(window.AudioContext||window.webkitAudioContext)();if(ctx.state==='suspended')await ctx.resume()}
+async function mic(){try{await audio();if(!navigator.mediaDevices?.getUserMedia)throw 0;if(!micStream)micStream=await navigator.mediaDevices.getUserMedia({audio:true});micButton.classList.add('active');micButton.textContent='● MICRÓFONO ACTIVO';status('MICRÓFONO LISTO · tocá un pad vacío')}catch(e){status('NO SE PUDO ACTIVAR EL MICRÓFONO · revisá el permiso')}}
+function wave(canvas,a,active=false){let c=canvas.getContext('2d'),w=canvas.width,h=canvas.height;c.clearRect(0,0,w,h);c.fillStyle='#0b0b0a';c.fillRect(0,0,w,h);if(!a)return;c.strokeStyle=active?'#ffe16b':'#f5c400';c.lineWidth=1.5;c.beginPath();let st=Math.max(1,Math.floor(a.length/w));for(let x=0;x<w;x++){let s=x*st,e=Math.min(a.length,s+st),p=0;for(let j=s;j<e;j++)p=Math.max(p,Math.abs(a[j]));let y=h/2-p*h*.43;x?c.lineTo(x,y):c.moveTo(x,y)}c.stroke();c.strokeStyle='#ffffff18';c.beginPath();c.moveTo(0,h/2);c.lineTo(w,h/2);c.stroke()}
+function live(i,an){let cv=pads[i].querySelector('.mini-wave'),c=cv.getContext('2d'),w=cv.width,h=cv.height,a=new Float32Array(an.fftSize);an.getFloatTimeDomainData(a);c.clearRect(0,0,w,h);c.fillStyle='#0b0b0a';c.fillRect(0,0,w,h);c.strokeStyle='#ff5548';c.lineWidth=2;c.beginPath();for(let x=0;x<w;x++){let y=h/2-a[Math.floor(x/w*a.length)]*h*.43;x?c.lineTo(x,y):c.moveTo(x,y)}c.stroke();if(recording===i)liveRAF=requestAnimationFrame(()=>live(i,an))}
+function wf(buf,n=1800){let ch=buf.getChannelData(0),o=new Float32Array(Math.min(n,ch.length)),b=ch.length/o.length;for(let i=0;i<o.length;i++){let s=i*b,e=(i+1)*b,p=0;for(let j=s|0;j<e&&j<ch.length;j++)p=Math.max(p,Math.abs(ch[j]));o[i]=p}return o}
+function pos(p=0){p=Math.max(0,Math.min(1,p));playhead.style.left=p*100+'%';return p}
+function read(p=0){let x=d[selected];readout.textContent=`PITCH ${x.pitch+x.tempPitch>=0?'+':''}${x.pitch+x.tempPitch} · SPEED ${x.tempSpeed.toFixed(2)}× · POS ${Math.round(p*100)}%`}
+function redraw(){d.forEach((x,i)=>{pads[i].querySelector('.pad-label').textContent=x.buffer?x.buffer.duration.toFixed(2)+'s':'EMPTY';if(recording!==i)wave(pads[i].querySelector('.mini-wave'),x.wave,i===selected)});let x=d[selected];selectedName.textContent=`PAD ${String(selected+1).padStart(2,'0')} · ${x.buffer?x.buffer.duration.toFixed(2)+' SEC':'SIN AUDIO'}`;wave(mainWave,x.wave,true);pos(0);read()}
+function stop(i){let x=d[i];if(x.source){try{x.source.stop()}catch(e){}try{x.source.disconnect()}catch(e){}}if(x.gain)try{x.gain.disconnect()}catch(e){}x.source=x.gain=null;x.playing=false;x.tempPitch=0;x.tempSpeed=1;pads[i].classList.remove('playing');if(i===selected)read()}
+function apply(i){let x=d[i],speed=Math.max(.25,Math.min(4,x.tempSpeed));x.source.playbackRate.setValueAtTime(speed,ctx.currentTime);let pitch=x.pitch+x.tempPitch-1200*Math.log2(speed);x.source.detune.setValueAtTime(pitch*100,ctx.currentTime)}
+async function play(i){let x=d[i];if(!x.buffer)return;await audio();stop(i);let s=ctx.createBufferSource(),g=ctx.createGain();s.buffer=x.buffer;s.loop=true;s.connect(g).connect(ctx.destination);g.gain.setValueAtTime(0,ctx.currentTime);g.gain.linearRampToValueAtTime(1,ctx.currentTime+.01);x.source=s;x.gain=g;x.playing=true;apply(i);s.start();pads[i].classList.add('playing')}
+function release(i){let x=d[i];if(!x.source||!x.gain)return;let t=ctx.currentTime;x.gain.gain.cancelScheduledValues(t);x.gain.gain.setValueAtTime(Math.max(.001,x.gain.gain.value),t);x.gain.gain.linearRampToValueAtTime(.0001,t+.5);try{x.source.stop(t+.51)}catch(e){}}
+async function record(i){if(recording>=0||d[i].buffer)return;if(!micStream){await mic();if(!micStream)return}await audio();recording=i;pads[i].classList.add('recording');status(`PAD ${String(i+1).padStart(2,'0')} · PREPARANDO · grabación en 1 segundo`);let src=ctx.createMediaStreamSource(micStream),an=ctx.createAnalyser();an.fftSize=2048;src.connect(an);d[i].an=an;timer=setTimeout(()=>{if(recording!==i)return;chunks=[];rec=new MediaRecorder(micStream);rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);rec.onstop=finish;rec.start();status(`GRABANDO PAD ${String(i+1).padStart(2,'0')} · soltá para terminar`);live(i,an)},1000)}
+async function finish(){let i=recording;if(i<0)return;cancelAnimationFrame(liveRAF);try{let blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'}),ab=await blob.arrayBuffer(),buf=await ctx.decodeAudioData(ab);d[i].blob=blob;d[i].buffer=buf;d[i].wave=wf(buf);d[i].pitch=0;selected=i;redraw();status(`PAD ${String(i+1).padStart(2,'0')} GRABADO · tocá para reproducir`)}catch(e){status('NO SE PUDO LEER LA GRABACIÓN')}pads[i].classList.remove('recording');recording=-1;rec=null}
+function stopRecord(){if(timer){clearTimeout(timer);timer=null}if(recording<0)return;let i=recording;if(rec&&rec.state!=='inactive')rec.stop();else{pads[i].classList.remove('recording');recording=-1;status('GRABACIÓN CANCELADA · soltaste antes del inicio')}}
+function erase(i){stop(i);stopScratch(i);d[i]={blob:null,buffer:null,wave:null,source:null,gain:null,playing:false,pitch:0,tempPitch:0,tempSpeed:1,scratch:null};selected=i;redraw();delMode=false;deleteBtn.classList.remove('active');status(`PAD ${String(i+1).padStart(2,'0')} BORRADO`)}
+pads.forEach((p,i)=>{p.addEventListener('pointerdown',async e=>{e.preventDefault();p.setPointerCapture(e.pointerId);selected=i;redraw();if(delMode){erase(i);return}pointers.set(e.pointerId,{mode:d[i].buffer?'play':'record',i,x:e.clientX,y:e.clientY});d[i].buffer?await play(i):await record(i)});p.addEventListener('pointermove',e=>{let q=pointers.get(e.pointerId);if(!q||q.mode!=='play'||!d[q.i].source)return;let dx=e.clientX-q.x,dy=e.clientY-q.y;if(Math.hypot(dx,dy)<28)return;d[q.i].tempPitch=Math.max(-12,Math.min(12,Math.round(-dy/22)));d[q.i].tempSpeed=Math.max(.5,Math.min(2,1+dx/260));apply(q.i);read()});p.addEventListener('pointerup',e=>{let q=pointers.get(e.pointerId);if(q?.mode==='record')stopRecord();if(q?.mode==='play')release(i);pointers.delete(e.pointerId)});p.addEventListener('pointercancel',e=>{let q=pointers.get(e.pointerId);if(q?.mode==='record')stopRecord();else release(i);pointers.delete(e.pointerId)})});
 
-  const pads = [...document.querySelectorAll(".pad")];
-  const statusEl = document.getElementById("status");
-  const selectedName = document.getElementById("selectedName");
-  const readout = document.getElementById("readout");
-  const mainWave = document.getElementById("mainWave");
-  const waveTouch = document.getElementById("waveTouch");
-  const micButton = document.getElementById("micButton");
-  const deleteModeButton = document.getElementById("deleteMode");
-  const resetEditButton = document.getElementById("resetEdit");
-
-  let audioCtx = null;
-  let micStream = null;
-  let mediaRecorder = null;
-  let chunks = [];
-  let recordingPad = -1;
-  let selectedPad = 0;
-  let deleteMode = false;
-  let pointerStates = new Map();
-
-  const data = Array.from({length:4}, () => ({
-    blob: null,
-    buffer: null,
-    waveform: null,
-    source: null,
-    gain: null,
-    playing: false,
-    editPitch: 0
-  }));
-
-  function setStatus(t){ statusEl.textContent = t; }
-
-  async function ensureAudio(){
-    if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if(audioCtx.state === "suspended") await audioCtx.resume();
-  }
-
-  async function activateMic(){
-    try{
-      await ensureAudio();
-      if(!navigator.mediaDevices?.getUserMedia) throw new Error("Micrófono no disponible");
-      micStream = await navigator.mediaDevices.getUserMedia({audio:true});
-      micButton.classList.add("active");
-      micButton.textContent = "● MICRÓFONO ACTIVO";
-      setStatus("MICRÓFONO LISTO · tocá un pad vacío");
-    }catch(err){
-      setStatus("NO SE PUDO ACTIVAR EL MICRÓFONO · revisá el permiso del navegador");
-    }
-  }
-
-  function drawWave(canvas, samples, active=false){
-    const ctx = canvas.getContext("2d");
-    const w = canvas.width, h = canvas.height;
-    ctx.clearRect(0,0,w,h);
-    ctx.fillStyle = "#0b0b0a";
-    ctx.fillRect(0,0,w,h);
-    if(!samples || !samples.length) return;
-
-    ctx.strokeStyle = active ? "#ffe16b" : "#f5c400";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-
-    const step = Math.max(1, Math.floor(samples.length / w));
-    for(let x=0;x<w;x++){
-      const start = x*step;
-      const end = Math.min(samples.length, start+step);
-      let peak = 0;
-      for(let i=start;i<end;i++) peak = Math.max(peak, Math.abs(samples[i]));
-      const y = h/2 - peak*(h*.43);
-      if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-    }
-    ctx.stroke();
-
-    ctx.strokeStyle = "#ffffff18";
-    ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
-  }
-
-  function makeWaveform(buffer, count=1800){
-    const ch = buffer.getChannelData(0);
-    const out = new Float32Array(Math.min(count, ch.length));
-    const block = ch.length/out.length;
-    for(let i=0;i<out.length;i++){
-      const start=Math.floor(i*block), end=Math.min(ch.length,Math.floor((i+1)*block));
-      let peak=0;
-      for(let j=start;j<end;j++) peak=Math.max(peak,Math.abs(ch[j]));
-      out[i]=peak;
-    }
-    return out;
-  }
-
-  function redrawAll(){
-    data.forEach((d,i)=>{
-      const label = pads[i].querySelector(".pad-label");
-      label.textContent = d.buffer ? `${d.buffer.duration.toFixed(2)}s` : "EMPTY";
-      drawWave(pads[i].querySelector(".mini-wave"), d.waveform, i===selectedPad);
-    });
-    const d=data[selectedPad];
-    selectedName.textContent = `PAD ${String(selectedPad+1).padStart(2,"0")} · ${d.buffer ? d.buffer.duration.toFixed(2)+" SEC" : "SIN AUDIO"}`;
-    readout.textContent = `PITCH ${d.editPitch >= 0 ? "+" : ""}${d.editPitch} · SPEED 1.00×`;
-    drawWave(mainWave,d.waveform,true);
-  }
-
-  async function startRecording(i){
-    if(recordingPad !== -1 || data[i].buffer) return;
-    if(!micStream) { await activateMic(); if(!micStream) return; }
-    chunks=[];
-    mediaRecorder = new MediaRecorder(micStream);
-    recordingPad=i;
-    pads[i].classList.add("recording");
-    setStatus(`GRABANDO PAD ${String(i+1).padStart(2,"0")} · soltá para terminar`);
-    mediaRecorder.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
-    mediaRecorder.onstop=async()=>{
-      try{
-        const blob=new Blob(chunks,{type:mediaRecorder.mimeType || "audio/webm"});
-        const arr=await blob.arrayBuffer();
-        await ensureAudio();
-        const buffer=await audioCtx.decodeAudioData(arr);
-        data[i].blob=blob;
-        data[i].buffer=buffer;
-        data[i].waveform=makeWaveform(buffer);
-        data[i].editPitch=0;
-        selectedPad=i;
-        redrawAll();
-        setStatus(`PAD ${String(i+1).padStart(2,"0")} GRABADO · tocá para reproducir`);
-      }catch(e){
-        setStatus("NO SE PUDO LEER LA GRABACIÓN");
-      }
-      pads[i].classList.remove("recording");
-      recordingPad=-1;
-    };
-    mediaRecorder.start();
-  }
-
-  function stopRecording(){
-    if(mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-  }
-
-  function stopSource(i){
-    const d=data[i];
-    if(d.source){
-      try{d.source.stop()}catch(e){}
-      d.source=null;
-    }
-    if(d.gain){ try{d.gain.disconnect()}catch(e){} d.gain=null; }
-    d.playing=false;
-    pads[i].classList.remove("playing");
-  }
-
-  async function playPad(i, hold=true, tempPitch=0, tempSpeed=1){
-    const d=data[i];
-    if(!d.buffer) return;
-    await ensureAudio();
-    stopSource(i);
-
-    const source=audioCtx.createBufferSource();
-    const gain=audioCtx.createGain();
-    const semitones=d.editPitch + tempPitch;
-    source.buffer=d.buffer;
-    source.playbackRate.value=Math.max(.25, Math.min(4, tempSpeed));
-    source.detune.value=semitones*100;
-    source.loop=hold;
-    gain.gain.setValueAtTime(0,audioCtx.currentTime);
-    gain.gain.linearRampToValueAtTime(1,audioCtx.currentTime+.012);
-    source.connect(gain).connect(audioCtx.destination);
-    source.start();
-    d.source=source; d.gain=gain; d.playing=true;
-    pads[i].classList.add("playing");
-    source.onended=()=>{
-      if(d.source===source){d.source=null;d.playing=false;pads[i].classList.remove("playing");}
-    };
-  }
-
-  function releasePad(i){
-    const d=data[i];
-    if(!d.source || !d.gain) return;
-    const now=audioCtx.currentTime;
-    d.gain.gain.cancelScheduledValues(now);
-    d.gain.gain.setValueAtTime(Math.max(.001,d.gain.gain.value),now);
-    d.gain.gain.linearRampToValueAtTime(.0001,now+.5);
-    try{d.source.stop(now+.51)}catch(e){}
-  }
-
-  function deletePad(i){
-    stopSource(i);
-    data[i]={blob:null,buffer:null,waveform:null,source:null,gain:null,playing:false,editPitch:0};
-    selectedPad=i;
-    redrawAll();
-    setStatus(`PAD ${String(i+1).padStart(2,"0")} BORRADO`);
-    deleteMode=false;
-    deleteModeButton.classList.remove("active");
-  }
-
-  pads.forEach((pad,i)=>{
-    pad.addEventListener("pointerdown", async e=>{
-      e.preventDefault();
-      pad.setPointerCapture(e.pointerId);
-      selectedPad=i;
-      redrawAll();
-
-      if(deleteMode){ deletePad(i); return; }
-
-      const d=data[i];
-      if(!d.buffer){
-        pointerStates.set(e.pointerId,{i,startX:e.clientX,startY:e.clientY,moved:false,mode:"record"});
-        await startRecording(i);
-      }else{
-        pointerStates.set(e.pointerId,{i,startX:e.clientX,startY:e.clientY,moved:false,mode:"play",pitch:0,speed:1});
-        await playPad(i,true,0,1);
-      }
-    });
-
-    pad.addEventListener("pointermove", e=>{
-      const s=pointerStates.get(e.pointerId);
-      if(!s || s.mode!=="play") return;
-      const dx=e.clientX-s.startX, dy=e.clientY-s.startY;
-      const threshold=28;
-      if(Math.hypot(dx,dy)<threshold) return;
-      s.moved=true;
-
-      const pitch=Math.max(-12,Math.min(12,Math.round(-dy/22)));
-      const speed=Math.max(.5,Math.min(2,1+dx/260));
-      s.pitch=pitch; s.speed=speed;
-      readout.textContent=`PITCH ${pitch>=0?"+":""}${pitch} · SPEED ${speed.toFixed(2)}×`;
-      playPad(s.i,true,pitch,speed);
-    });
-
-    pad.addEventListener("pointerup", e=>{
-      const s=pointerStates.get(e.pointerId);
-      if(s?.mode==="record") stopRecording();
-      else if(s?.mode==="play") releasePad(i);
-      pointerStates.delete(e.pointerId);
-    });
-    pad.addEventListener("pointercancel", e=>{
-      const s=pointerStates.get(e.pointerId);
-      if(s?.mode==="record") stopRecording();
-      else releasePad(i);
-      pointerStates.delete(e.pointerId);
-    });
-  });
-
-  waveTouch.addEventListener("pointerdown",e=>{
-    if(!data[selectedPad].buffer) return;
-    waveTouch.setPointerCapture(e.pointerId);
-    pointerStates.set(e.pointerId,{startX:e.clientX,startY:e.clientY,lastX:e.clientX,lastY:e.clientY});
-  });
-
-  waveTouch.addEventListener("pointermove",e=>{
-    const s=pointerStates.get(e.pointerId);
-    const d=data[selectedPad];
-    if(!s || !d.buffer) return;
-    const dx=e.clientX-s.startX, dy=e.clientY-s.startY;
-    const threshold=30;
-    if(Math.hypot(dx,dy)<threshold) return;
-
-    if(Math.abs(dy)>=Math.abs(dx)){
-      d.editPitch=Math.max(-24,Math.min(24,Math.round(-dy/25)));
-      readout.textContent=`PITCH ${d.editPitch>=0?"+":""}${d.editPitch} · SPEED 1.00×`;
-    }else{
-      // Scratch: map horizontal position to a moving point in the buffer.
-      const ratio=Math.max(0,Math.min(1,(e.clientX-waveTouch.getBoundingClientRect().left)/waveTouch.clientWidth));
-      const when=ratio*d.buffer.duration;
-      const source=d.source;
-      if(!source){
-        ensureAudio().then(()=>{
-          if(!data[selectedPad].buffer) return;
-          const src=audioCtx.createBufferSource();
-          const gain=audioCtx.createGain();
-          src.buffer=d.buffer;
-          src.detune.value=d.editPitch*100;
-          gain.gain.value=.75;
-          src.connect(gain).connect(audioCtx.destination);
-          src.start(0,Math.max(0,Math.min(d.buffer.duration-.01,when)));
-          d.source=src; d.gain=gain; d.playing=true;
-          src.onended=()=>{if(d.source===src){d.source=null;d.playing=false;}};
-        });
-      }else{
-        try{source.playbackRate.value=Math.max(.25,Math.min(4,1+dx/80));}catch(e){}
-      }
-      setStatus(dx>=0 ? "SCRATCH →" : "SCRATCH ←");
-    }
-    s.lastX=e.clientX;s.lastY=e.clientY;
-  });
-
-  function endWave(e){
-    const s=pointerStates.get(e.pointerId);
-    if(s){
-      if(data[selectedPad].source && !data[selectedPad].playing) data[selectedPad].source=null;
-      pointerStates.delete(e.pointerId);
-    }
-  }
-  waveTouch.addEventListener("pointerup",endWave);
-  waveTouch.addEventListener("pointercancel",endWave);
-
-  deleteModeButton.addEventListener("click",()=>{
-    deleteMode=!deleteMode;
-    deleteModeButton.classList.toggle("active",deleteMode);
-    setStatus(deleteMode ? "MODO BORRAR · tocá el pad que querés eliminar" : "MODO BORRAR CANCELADO");
-  });
-
-  resetEditButton.addEventListener("click",()=>{
-    data[selectedPad].editPitch=0;
-    redrawAll();
-    setStatus("PITCH PERMANENTE RESTAURADO");
-  });
-
-  micButton.addEventListener("click",activateMic);
-
-  redrawAll();
+// SCRATCH DECK: la posición horizontal del dedo es la posición de lectura real.
+// La velocidad y el sentido se calculan por la velocidad del dedo. Al soltar, el motor se detiene suavemente.
+function createScratch(){let x=d[selected];if(!x.buffer)return null;stopScratch(selected);let ch=x.buffer.getChannelData(0),n=ch.length,node=ctx.createScriptProcessor(1024,0,2),g=ctx.createGain();g.gain.setValueAtTime(.85,ctx.currentTime);let s={node,g,pos:0,targetPos:0,speed:0,targetSpeed:0,pitchRatio:1,active:true};node.onaudioprocess=e=>{let L=e.outputBuffer.getChannelData(0),R=e.outputBuffer.numberOfChannels>1?e.outputBuffer.getChannelData(1):null;for(let k=0;k<L.length;k++){// Suavizado de velocidad y seguimiento de dedo.
+s.speed+=(s.targetSpeed-s.speed)*.035;s.pos+=(s.targetPos-s.pos)*.055;
+let p=Math.max(0,Math.min(n-1,s.pos)),a=p|0,b=Math.min(n-1,a+1),f=p-a,v=ch[a]*(1-f)+ch[b]*f;L[k]=v;if(R)R[k]=v;
+// El pitch permanente cambia la velocidad de lectura como un tape deck.
+s.pos+=s.speed*s.pitchRatio;
+if(s.pos>=n)s.pos-=n;if(s.pos<0)s.pos+=n;
+}if(s.active===false){s.speed*=.97;s.targetSpeed=0}}
+node.connect(g).connect(ctx.destination);x.scratch=s;return s}
+function stopScratch(i){let x=d[i];if(!x.scratch)return;x.scratch.active=false;try{x.scratch.node.disconnect()}catch(e){}try{x.scratch.g.disconnect()}catch(e){}x.scratch=null}
+function scratchPlayhead(){cancelAnimationFrame(playheadRAF);const tick=()=>{let x=d[selected],s=x.scratch;if(s&&x.buffer){let p=s.pos/x.buffer.length;pos(p);read(p);playheadRAF=requestAnimationFrame(tick)}};tick()}
+waveTouch.addEventListener('pointerdown',async e=>{if(!d[selected].buffer)return;e.preventDefault();waveTouch.setPointerCapture(e.pointerId);await audio();let r=waveTouch.getBoundingClientRect(),p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),s=createScratch();if(!s)return;s.pos=p*d[selected].buffer.length;s.targetPos=s.pos;s.speed=0;s.targetSpeed=0;s.pitchRatio=Math.pow(2,d[selected].pitch/12);pointers.set(e.pointerId,{mode:'scratch',sx:e.clientX,sy:e.clientY,lx:e.clientX,ly:e.clientY,t:performance.now(),moved:false});pos(p);read(p);scratchPlayhead();status('SCRATCH · mové el dedo sobre la onda')});
+waveTouch.addEventListener('pointermove',e=>{let q=pointers.get(e.pointerId);if(!q||q.mode!=='scratch')return;let x=d[selected],s=x.scratch;if(!s)return;let dx=e.clientX-q.lx,dy=e.clientY-q.ly,totalX=e.clientX-q.sx,totalY=e.clientY-q.sy;if(Math.hypot(totalX,totalY)<30)return;q.moved=true;let r=waveTouch.getBoundingClientRect(),p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+if(Math.abs(totalY)>Math.abs(totalX)){
+x.pitch=Math.max(-24,Math.min(24,Math.round(-totalY/25)));s.pitchRatio=Math.pow(2,x.pitch/12);read(p);status(`PITCH PERMANENTE ${x.pitch>=0?'+':''}${x.pitch}`);
+}else{
+let dt=Math.max(8,performance.now()-q.t);let fingerSpeed=dx/dt; // px/ms: conserva dirección y velocidad.
+s.targetPos=p*x.buffer.length;s.targetSpeed=Math.max(-5,Math.min(5,fingerSpeed*12));s.pitchRatio=Math.pow(2,x.pitch/12);read(p);status(s.targetSpeed<0?'SCRATCH ← REVERSA':`SCRATCH → ${Math.abs(s.targetSpeed).toFixed(1)}×`);
+}
+q.lx=e.clientX;q.ly=e.clientY;q.t=performance.now()});
+function endScratch(e){let q=pointers.get(e.pointerId);if(q?.mode==='scratch'){let x=d[selected],s=x.scratch;if(s){s.targetSpeed=0;status('SCRATCH PAUSADO');setTimeout(()=>{if(x.scratch===s)stopScratch(selected)},120)}}pointers.delete(e.pointerId)}
+waveTouch.addEventListener('pointerup',endScratch);waveTouch.addEventListener('pointercancel',endScratch);
+deleteBtn.addEventListener('click',()=>{delMode=!delMode;deleteBtn.classList.toggle('active',delMode);status(delMode?'MODO BORRAR · tocá el pad que querés eliminar':'MODO BORRAR CANCELADO')});resetBtn.addEventListener('click',()=>{d[selected].pitch=0;if(d[selected].scratch)d[selected].scratch.pitchRatio=1;redraw();status('PITCH PERMANENTE RESTAURADO')});micButton.addEventListener('click',mic);redraw();
 })();
