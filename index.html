@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111111">
+  <title>TONGA SAMPLER</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
+  <header class="topbar">
+    <div>
+      <div class="brand">TONGA <span>SAMPLER</span></div>
+      <div id="status" class="status">LISTO · tocá un pad vacío para grabar</div>
+    </div>
+    <button id="deleteMode" class="danger" type="button">BORRAR</button>
+  </header>
+
+  <section class="pads" aria-label="Pads del sampler">
+    <button class="pad" data-pad="0" type="button">
+      <span class="pad-number">01</span>
+      <span class="pad-label">EMPTY</span>
+      <canvas class="mini-wave" width="500" height="100"></canvas>
+      <span class="pad-meta">REC / PLAY</span>
+    </button>
+    <button class="pad" data-pad="1" type="button">
+      <span class="pad-number">02</span>
+      <span class="pad-label">EMPTY</span>
+      <canvas class="mini-wave" width="500" height="100"></canvas>
+      <span class="pad-meta">REC / PLAY</span>
+    </button>
+    <button class="pad" data-pad="2" type="button">
+      <span class="pad-number">03</span>
+      <span class="pad-label">EMPTY</span>
+      <canvas class="mini-wave" width="500" height="100"></canvas>
+      <span class="pad-meta">REC / PLAY</span>
+    </button>
+    <button class="pad" data-pad="3" type="button">
+      <span class="pad-number">04</span>
+      <span class="pad-label">EMPTY</span>
+      <canvas class="mini-wave" width="500" height="100"></canvas>
+      <span class="pad-meta">REC / PLAY</span>
+    </button>
+  </section>
+
+  <section class="editor">
+    <div class="editor-head">
+      <div>
+        <strong id="selectedName">PAD 01 · SIN AUDIO</strong>
+        <span id="readout">PITCH 0 · SPEED 1.00×</span>
+      </div>
+      <button id="resetEdit" class="small-button" type="button">RESET PITCH</button>
+    </div>
+    <div id="waveTouch" class="wave-wrap" aria-label="Editor y scratch">
+      <canvas id="mainWave" width="1200" height="300"></canvas>
+      <div class="center-line"></div>
+      <div class="gesture-hint">↑↓ PITCH · ←→ SCRATCH</div>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button id="micButton" class="mic" type="button">● ACTIVAR MICRÓFONO</button>
+    <div class="help">
+      <span>PAD: mantener = loop</span>
+      <span>↑↓ pitch temporal</span>
+      <span>←→ velocidad</span>
+      <span>EDITOR: ↑↓ pitch permanente · ←→ scratch</span>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
